@@ -680,8 +680,19 @@ const GITHUB_BRANCH = "main";
 const GITHUB_PATH   = "data.json";
 // Quick-fix auth: keep the token in this browser instead of hard-coding it in the shared HTML file.
 const TOKEN_STORAGE_KEY = "wave4-github-token";
-const GITHUB_TOKEN = "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";
-function ensureGithubToken(){ return true; }
+let GITHUB_TOKEN = localStorage.getItem(TOKEN_STORAGE_KEY) || "";
+function setGithubToken(token){
+  GITHUB_TOKEN = (token || "").trim();
+  if(GITHUB_TOKEN) localStorage.setItem(TOKEN_STORAGE_KEY, GITHUB_TOKEN);
+  else localStorage.removeItem(TOKEN_STORAGE_KEY);
+}
+function ensureGithubToken(){
+  if(GITHUB_TOKEN) return true;
+  const token = prompt("الصق GitHub Personal Access Token الجديد هنا\n\nلازم يكون Fine-grained ومسموح له Contents: Read and write على مستودع gadwl-el-sheta.");
+  if(!token || !token.trim()) return false;
+  setGithubToken(token);
+  return true;
+}
 const GITHUB_API_URL = "https://api.github.com/repos/" + GITHUB_OWNER + "/" + GITHUB_REPO + "/contents/" + GITHUB_PATH;
 let githubSha = null; // tracks the file's current version so writes don't clobber each other
 
