@@ -411,6 +411,7 @@
 #adminPanel.show{display:flex}.admin-card{width:min(760px,100%);max-height:90vh;overflow:auto;background:#fff;border-radius:22px;padding:22px;box-shadow:0 20px 70px rgba(0,0,0,.25)}
 .admin-head{display:flex;justify-content:space-between;gap:12px;align-items:center}.admin-head h3{margin:0}.admin-close{border:0;background:#edf5f4;border-radius:10px;padding:8px 12px;cursor:pointer;font:inherit}
 .log-table{width:100%;border-collapse:collapse;margin-top:15px;font-size:14px}.log-table th,.log-table td{padding:9px;border-bottom:1px solid #e5eeee;text-align:right}.log-empty{text-align:center;padding:25px;color:#718080}
+.private-admin-box{margin-top:18px;padding:14px;background:#f7fbfa;border:1px solid #e0ecea;border-radius:14px}.private-admin-box h4{margin:0 0 8px}.private-admin-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.private-admin-refresh{border:0;border-radius:10px;padding:8px 12px;background:var(--lane1);color:#fff;font-family:inherit;font-weight:800;cursor:pointer}.private-admin-table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}.private-admin-table th,.private-admin-table td{padding:8px 6px;border-bottom:1px solid #e0ecea;text-align:center}.private-admin-table th{background:#edf5f4}.private-admin-btn{border:0;border-radius:8px;padding:6px 9px;font-family:inherit;font-weight:800;cursor:pointer;margin:2px}.private-admin-edit{background:#eaf4ff;color:#1769aa}.private-admin-delete{background:#fff0ef;color:#c2453e}.private-admin-note{font-size:12px;color:#607273;margin-top:7px}.private-admin-error{color:#c2453e;font-weight:700;font-size:13px;margin-top:8px}
 </style>
 
 <style id="mohanad-signature-style">
@@ -454,6 +455,14 @@
     <div class="admin-head"><h3>سجل الدخول</h3><button class="admin-close" id="adminClose" type="button">إغلاق</button></div>
     <p style="color:#607273;margin:8px 0">آخر 100 عملية دخول مسجلة على الجدول.</p>
     <div id="adminLogs"></div>
+    <div class="private-admin-box">
+      <h4>إدارة حجوزات البرايفت</h4>
+      <div class="private-admin-actions">
+        <button id="privateAdminRefresh" class="private-admin-refresh" type="button">تحديث الحجوزات ↻</button>
+        <span id="privateAdminStatus" class="private-admin-note">يمكن للأدمن تعديل أو حذف أي حجز.</span>
+      </div>
+      <div id="privateAdminBookings"></div>
+    </div>
   </div>
 </div>
 
@@ -565,12 +574,12 @@
 <script>
 const WAVE_ENTRY_CODE='1234';
 const WAVE_ADMIN_USERNAME='admin';
-const WAVE_ADMIN_PASSWORD='0000';
 const AUTH_MAX_AGE_MS=60*60*1000;
 let waveCurrentUser=null;
 let accessLog=[];
 let bannedUsers=[];
 let remoteLoadedSuccessfully=false;
+let privateAdminToken='';
 function normName(s){return (s||'').trim().replace(/\s+/g,' ').toLowerCase();}
 function isBanned(name){const n=normName(name);return bannedUsers.some(x=>normName(x)===n);}
 function readAdminSession(){
@@ -582,8 +591,8 @@ function readAdminSession(){
     return x;
   }catch(e){ try{localStorage.removeItem('wave_admin_session');}catch(_){} return null; }
 }
-function saveAdminSession(){
-  try{localStorage.setItem('wave_admin_session', JSON.stringify({name:'admin',expiresAt:Date.now()+AUTH_MAX_AGE_MS}));}catch(e){}
+function saveAdminSession(token){
+  try{localStorage.setItem('wave_admin_session', JSON.stringify({name:'admin',token:String(token||''),expiresAt:Date.now()+AUTH_MAX_AGE_MS}));}catch(e){}
 }
 function clearAdminSession(){
   try{localStorage.removeItem('wave_admin_session');}catch(e){}
@@ -596,13 +605,13 @@ function updateAuthHeader(){
   if(waveCurrentUser&&waveCurrentUser.admin)a.onclick=openAdminPanel;
   if(waveCurrentUser)l.onclick=()=>{ if(waveCurrentUser.admin) clearAdminSession(); location.reload(); };
 }
-function finishEntry(name,admin){
+function finishEntry(name,admin,backendToken){
   if(!admin&&isBanned(name)){document.getElementById('accessMsg').textContent='الدخول موقوف لهذا الاسم — راجع الأدمن';return;}
   waveCurrentUser={name,admin:!!admin,enteredAt:Date.now()};
   document.getElementById('accessGate').hidden=true; window.waveAuthReady=true; updateAuthHeader();
   clearTimeout(window.waveAuthExpiryTimer); window.waveAuthExpiryTimer=setTimeout(()=>location.reload(),AUTH_MAX_AGE_MS);
   accessLog=Array.isArray(accessLog)?accessLog:[]; accessLog.unshift({name,role:admin?'Admin':'مستخدم',time:new Date().toISOString()}); accessLog=accessLog.slice(0,100);
-  if(admin) saveAdminSession();
+  if(admin){ privateAdminToken=String(backendToken||''); saveAdminSession(privateAdminToken); }
   if(remoteLoadedSuccessfully)scheduleSave(0);
 }
 function renderAdminLogs(){
@@ -615,23 +624,36 @@ function renderAdminLogs(){
   el.innerHTML=h; document.getElementById('banUserBtn').onclick=()=>{const i=document.getElementById('banUserInput'),name=i.value.trim();if(!name)return;if(normName(name)===normName(WAVE_ADMIN_USERNAME)){alert('مينفعش تطرد حساب الأدمن');return;}if(!isBanned(name))bannedUsers.push(name);i.value='';renderAdminLogs();scheduleSave(0);};
   el.querySelectorAll('[data-unban]').forEach(b=>b.onclick=()=>{bannedUsers.splice(Number(b.dataset.unban),1);renderAdminLogs();scheduleSave(0);});
 }
-function openAdminPanel(){renderAdminLogs();document.getElementById('adminPanel').classList.add('show');}
+function openAdminPanel(){renderAdminLogs();renderPrivateAdminBookings();document.getElementById('adminPanel').classList.add('show');}
 function initAccessGate(){
   window.waveAuthReady=false; waveCurrentUser=null; document.getElementById('accessGate').hidden=false; updateAuthHeader();
   if(!data)data=cloneDefault(); normalizeSettings(); buildLegend(); buildColorChips(); buildBody();
   const adminSession=readAdminSession();
-  if(adminSession){
+  if(adminSession && adminSession.token){
+    privateAdminToken=String(adminSession.token);
     waveCurrentUser={name:'admin',admin:true,enteredAt:Date.now()};
     document.getElementById('accessGate').hidden=true;
     window.waveAuthReady=true;
     updateAuthHeader();
     clearTimeout(window.waveAuthExpiryTimer);
     window.waveAuthExpiryTimer=setTimeout(()=>{clearAdminSession();location.reload();}, Math.max(1000, Number(adminSession.expiresAt)-Date.now()));
+  } else if(adminSession){
+    clearAdminSession();
   }
   loadData(true);
 }
 document.getElementById('enterBtn').onclick=()=>{const n=document.getElementById('accessName').value.trim(),c=document.getElementById('accessCode').value.trim(),m=document.getElementById('accessMsg');if(!n){m.textContent='اكتب اسمك الأول';return;}if(c!==WAVE_ENTRY_CODE){m.textContent='كود الدخول غير صحيح';return;}finishEntry(n,false);};
-document.getElementById('adminLoginBtn').onclick=()=>{const n=prompt('اسم حساب الأدمن:','admin');if(n===null)return;const p=prompt('باسورد الأدمن:');if(n.trim()===WAVE_ADMIN_USERNAME&&p===WAVE_ADMIN_PASSWORD){finishEntry('admin',true);}else document.getElementById('accessMsg').textContent='بيانات الأدمن غير صحيحة';};
+document.getElementById('adminLoginBtn').onclick=async()=>{
+  const n=prompt('اسم حساب الأدمن:','admin'); if(n===null)return;
+  const p=prompt('باسورد الأدمن:'); if(p===null)return;
+  const m=document.getElementById('accessMsg'); m.textContent='جاري التحقق من صلاحية الأدمن…';
+  if(n.trim()!==WAVE_ADMIN_USERNAME){m.textContent='بيانات الأدمن غير صحيحة';return;}
+  try{
+    const res=await privateJsonp('adminlogin',{username:n.trim(),password:p});
+    if(!res||!res.ok||!res.token) throw new Error((res&&res.error)||'تعذر تسجيل دخول الأدمن');
+    finishEntry('admin',true,res.token);
+  }catch(e){m.textContent=e.message||'تعذر تسجيل دخول الأدمن';}
+};
 document.getElementById('adminClose').onclick=()=>document.getElementById('adminPanel').classList.remove('show');
 document.getElementById('adminPanel').onclick=e=>{if(e.target.id==='adminPanel')e.currentTarget.classList.remove('show');};
 
@@ -1521,7 +1543,7 @@ setInterval(()=> loadData(false), 20000);
 const PRIVATE_BOOKING_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbysYl62kybl1nTIHXpkGPC4hXQygXF_mBHLiTG94WLRBw2-x1sH4Uot_3Tdq13BGje6ow/exec';
 let privateBookingsRequest = 0;
 
-function privateJsonp(action){
+function privateJsonp(action,params){
   return new Promise((resolve,reject)=>{
     const cb='wavePrivateBookings_'+Date.now()+'_'+Math.floor(Math.random()*100000);
     const script=document.createElement('script');
@@ -1529,7 +1551,9 @@ function privateJsonp(action){
     function cleanup(){clearTimeout(timer);script.remove();try{delete window[cb];}catch(e){window[cb]=undefined;}}
     window[cb]=(data)=>{cleanup();resolve(data);};
     script.onerror=()=>{cleanup();reject(new Error('تعذر تحميل الحجوزات'));};
-    script.src=PRIVATE_BOOKING_BACKEND_URL+'?action='+encodeURIComponent(action)+'&callback='+encodeURIComponent(cb)+'&_='+Date.now();
+    let url=PRIVATE_BOOKING_BACKEND_URL+'?action='+encodeURIComponent(action)+'&callback='+encodeURIComponent(cb)+'&_='+Date.now();
+    Object.keys(params||{}).forEach(k=>{url+='&'+encodeURIComponent(k)+'='+encodeURIComponent(params[k]);});
+    script.src=url;
     document.head.appendChild(script);
   });
 }
@@ -1546,6 +1570,61 @@ function privateDateLabel(date){
   const d=new Date(date+'T00:00:00');
   if(isNaN(d.getTime())) return String(date||'');
   return d.getDate()+' '+ARABIC_MONTHS[d.getMonth()]+' '+d.getFullYear();
+}
+
+function privateAdminHourLabel(h){ return privateHourLabel(h); }
+function privateAdminDurationText(v){ const d=Number(v||0); return d===1?'ساعة':d===1.5?'ساعة ونصف':d===2?'ساعتين':d+' ساعة'; }
+function privateAdminDateLabel(date){ return privateDateLabel(date); }
+
+async function renderPrivateAdminBookings(){
+  const box=document.getElementById('privateAdminBookings');
+  const status=document.getElementById('privateAdminStatus');
+  if(!box||!status)return;
+  if(!privateAdminToken){box.innerHTML='<div class="private-admin-error">سجّل دخول الأدمن من جديد.</div>';return;}
+  status.textContent='جاري تحميل الحجوزات…'; box.innerHTML='';
+  try{
+    const res=await privateJsonp('bookings');
+    if(!res||!res.ok)throw new Error((res&&res.error)||'تعذر تحميل الحجوزات');
+    const arr=Array.isArray(res.bookings)?res.bookings.slice():[];
+    arr.sort((a,b)=>String(b.date||'').localeCompare(String(a.date||''))||Number(a.startHour||0)-Number(b.startHour||0));
+    if(!arr.length){box.innerHTML='<div class="log-empty">مفيش حجوزات حاليًا.</div>';status.textContent='لا توجد حجوزات';return;}
+    const table=document.createElement('table'); table.className='private-admin-table';
+    table.innerHTML='<thead><tr><th>اليوم / التاريخ</th><th>الساعة</th><th>المدة</th><th>السباحين</th><th>المدرب</th><th>النوع</th><th>إجراء</th></tr></thead>';
+    const tb=document.createElement('tbody');
+    arr.forEach(b=>{
+      const tr=document.createElement('tr');
+      [((b.day||'')+' — '+privateAdminDateLabel(b.date||'')),privateAdminHourLabel(b.startHour),privateAdminDurationText(b.duration),String(b.swimmers||0),b.coach||'—',b.type||'—'].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.appendChild(td);});
+      const act=document.createElement('td');
+      const edit=document.createElement('button'); edit.className='private-admin-btn private-admin-edit';edit.type='button';edit.textContent='تعديل';edit.onclick=()=>privateAdminEditBooking(b);
+      const del=document.createElement('button'); del.className='private-admin-btn private-admin-delete';del.type='button';del.textContent='حذف';del.onclick=()=>privateAdminDeleteBooking(b);
+      act.appendChild(edit);act.appendChild(del);tr.appendChild(act);tb.appendChild(tr);
+    });
+    table.appendChild(tb);box.appendChild(table);status.textContent='إجمالي الحجوزات: '+arr.length;
+  }catch(e){status.textContent='تعذر تحميل الحجوزات';box.innerHTML='<div class="private-admin-error">'+escapeHtml(e.message||e)+'</div>';}
+}
+
+async function privateAdminDeleteBooking(b){
+  if(!confirm('متأكد إنك عايز تمسح حجز '+(b.coach||'')+'؟'))return;
+  try{
+    const res=await privateJsonp('admindelete',{token:privateAdminToken,id:b.id});
+    if(!res||!res.ok)throw new Error((res&&res.error)||'تعذر حذف الحجز');
+    renderPrivateAdminBookings(); loadPrivateBookings(); alert('تم حذف الحجز ✓');
+  }catch(e){alert(e.message||e);}
+}
+
+async function privateAdminEditBooking(b){
+  const date=prompt('التاريخ YYYY-MM-DD:',b.date||''); if(date===null)return;
+  const start=prompt('ساعة البداية 8 إلى 23:',String(b.startHour)); if(start===null)return;
+  const duration=prompt('المدة 1 أو 1.5 أو 2:',String(b.duration)); if(duration===null)return;
+  const swimmers=prompt('عدد السباحين:',String(b.swimmers)); if(swimmers===null)return;
+  const coach=prompt('اسم المدرب:',b.coach||''); if(coach===null)return;
+  const type=prompt('النوع: عايم أو تعليمي:',b.type||'عايم'); if(type===null)return;
+  if(!confirm('تأكيد تعديل الحجز؟'))return;
+  try{
+    const res=await privateJsonp('adminupdate',{token:privateAdminToken,id:b.id,date:date,startHour:start,duration:duration,swimmers:swimmers,coach:coach,type:type});
+    if(!res||!res.ok)throw new Error((res&&res.error)||'تعذر تعديل الحجز');
+    renderPrivateAdminBookings(); loadPrivateBookings(); alert('تم تعديل الحجز ✓');
+  }catch(e){alert(e.message||e);}
 }
 
 function renderPrivateBookings(bookings){
@@ -1599,6 +1678,7 @@ async function loadPrivateBookings(){
 }
 
 document.getElementById('privateBookingsRefresh').addEventListener('click',loadPrivateBookings);
+document.getElementById('privateAdminRefresh').addEventListener('click',renderPrivateAdminBookings);
 loadPrivateBookings();
 setInterval(loadPrivateBookings,30000);
 
